@@ -13,7 +13,7 @@ export function RoutingAnimationModal({ isOpen, onClose }: { isOpen: boolean, on
   useEffect(() => {
     if (isOpen) {
       setStep(0);
-      const timers = [];
+      const timers: ReturnType<typeof setTimeout>[] = [];
       for (let i = 1; i <= steps.length; i++) {
         timers.push(setTimeout(() => setStep(i), i * 1500));
       }
