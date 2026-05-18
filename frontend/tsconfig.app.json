@@ -17,7 +17,6 @@
     "jsx": "react-jsx",
 
     /* Alias */
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     },
@@ -26,8 +25,7 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true,
-    "ignoreDeprecations": "6.0"
+    "noFallthroughCasesInSwitch": true
   },
   "include": ["src"]
 }
