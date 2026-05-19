@@ -99,3 +99,10 @@ venv/
 node_modules/
 dist/
 build/
+node_modules/
+venv/
+__pycache__/
+*.pyc
+dist/
+build/
+.env
