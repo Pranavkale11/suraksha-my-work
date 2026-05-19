@@ -45,8 +45,10 @@ from services.map_generator import (
     build_provenance_path,
     severity_to_risk,
 )
+from services.map_completion import validate_required_evidence
+from services.validator_service import validate_evidence
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 def get_db():
@@ -711,27 +713,49 @@ async def complete_map(
     if role not in ADMIN_ROLES and m.get("assigned_to") != current_user["emp_id"]:
         raise HTTPException(403, "You are not assigned to this MAP")
 
-    evidence = m.get("evidence_items", [])
-    missing = [e["label"] for e in evidence if e.get("required") and not e.get("uploaded")]
-    if missing:
-        raise HTTPException(400, f"Upload required evidence first: {', '.join(missing)}")
-
     now = datetime.utcnow()
-    await database.maps.update_one(
-        {"map_id": map_id},
-        {"$set": {
+    validation = await validate_required_evidence(database, m)
+    update_fields = {
+        "evidence_items": validation["evidence_items"],
+        "submitted_for_validation_at": now,
+        "last_validation_checked_at": validation["checked_at"],
+    }
+
+    if not validation["can_complete"]:
+        update_fields.update({
             "status": "pending_validation",
-            "submitted_for_validation_at": now,
+            "validation_blockers": validation["blockers"],
             "timeline": build_timeline("pending_validation", m.get("created_at", now), now),
-        }},
-    )
+        })
+        await database.maps.update_one({"map_id": map_id}, {"$set": update_fields})
+        await log_audit(
+            database, map_id,
+            current_user["emp_id"], current_user.get("name", "Employee"),
+            "map_validation_blocked",
+            f"Completion blocked by evidence validation: {validation['blockers']}",
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "MAP cannot be completed until required evidence passes validation or is officer-overridden.",
+                "blockers": validation["blockers"],
+            },
+        )
+
+    update_fields.update({
+        "status": "complete",
+        "completed_at": now,
+        "validation_blockers": [],
+        "timeline": build_timeline("complete", m.get("created_at", now), now),
+    })
+    await database.maps.update_one({"map_id": map_id}, {"$set": update_fields})
     await log_audit(
         database, map_id,
         current_user["emp_id"], current_user.get("name", "Employee"),
-        "map_submitted_for_validation",
-        "Task submitted for evidence validation",
+        "map_completed",
+        "Required evidence validated; MAP marked complete",
     )
-    return {"status": "pending_validation", "map_id": map_id}
+    return {"status": "complete", "map_id": map_id, "validated_evidence": len(validation["evidence_items"])}
 
 
 @router.post("/{map_id}/route")
@@ -775,8 +799,30 @@ async def upload_evidence(
         f_out.write(contents)
 
     evidence[evidence_index]["uploaded"] = True
+    evidence_id = f"ev_{uuid.uuid4().hex[:10]}"
     evidence[evidence_index]["file_url"] = f"/uploads/{filename}"
     evidence[evidence_index]["uploaded_at"] = datetime.utcnow().isoformat()
+    evidence[evidence_index]["evidence_id"] = evidence_id
+    evidence[evidence_index]["validation_status"] = "pending_validation"
+
+    await database.evidence.insert_one({
+        "evidence_id": evidence_id,
+        "map_id": map_id,
+        "evidence_index": evidence_index,
+        "type": evidence[evidence_index].get("evidence_type", "generic"),
+        "filename": filename,
+        "original_filename": file.filename,
+        "file_path": filepath,
+        "file_url": f"/uploads/{filename}",
+        "uploader_id": current_user["emp_id"],
+        "uploaded_at": datetime.utcnow(),
+        "validation_status": "pending_validation",
+        "required_keywords": evidence[evidence_index].get("required_keywords"),
+    })
+
+    validation_result = await validate_evidence(database, evidence_id)
+    evidence[evidence_index]["validation_status"] = validation_result["validation_status"]
+    evidence[evidence_index]["confidence"] = validation_result["confidence_score"]
 
     await database.maps.update_one(
         {"map_id": map_id},
@@ -792,6 +838,9 @@ async def upload_evidence(
         "status": "uploaded",
         "map_id": map_id,
         "evidence_index": evidence_index,
+        "evidence_id": evidence_id,
+        "validation_status": validation_result["validation_status"],
+        "confidence_score": validation_result["confidence_score"],
         "file_url": f"/uploads/{filename}",
     }
 

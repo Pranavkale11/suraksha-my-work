@@ -26,6 +26,13 @@ const employeeNav = [
   { to: '/employee/dashboard', icon: '📋', label: 'My Tasks', exact: true },
 ];
 
+const deptNav = [
+  { to: '/dept', icon: '🏢', label: 'Department Portal', exact: true },
+  { to: '/dept/maps', icon: '📋', label: 'My MAPs' },
+  { to: '/dept/team', icon: '👥', label: 'Team Board' },
+  { to: '/dept/stats', icon: '📊', label: 'My Stats' },
+];
+
 // ─── Role badge colours ──────────────────────────────────────────────────────
 const roleBadge: Record<string, string> = {
   admin: 'bg-red-700 text-white',
@@ -62,7 +69,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   // Pick nav for role
   let navItems = adminNav;
-  if (isEmployee) navItems = employeeNav;
+  if (user?.role === 'department_head') navItems = deptNav;
+  else if (isEmployee) navItems = employeeNav;
   else if (isAuditor) navItems = auditorNav;
 
   const role = user?.role ?? 'compliance_officer';

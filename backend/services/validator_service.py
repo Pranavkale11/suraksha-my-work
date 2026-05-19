@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 PASS_THRESHOLD = 0.70
 FAIL_THRESHOLD = 0.40
+MAX_PDF_PAGES = 100
+MAX_EVIDENCE_FILE_SIZE = 50 * 1024 * 1024
 
 
 def _score_from_checks(checks: list[dict]) -> tuple[float, str]:
@@ -69,13 +71,14 @@ def validate_pdf_file(
         from PyPDF2 import PdfReader
 
         reader = PdfReader(file_path)
-        text = " ".join((page.extract_text() or "") for page in reader.pages[:20])
+        page_count = len(reader.pages)
+        text = " ".join((page.extract_text() or "") for page in reader.pages[:MAX_PDF_PAGES])
         meta = reader.metadata or {}
         checks.append({"name": "File type check", "status": "pass"})
         checks.append({
-            "name": "Page count",
-            "status": "pass" if len(reader.pages) >= 1 else "fail",
-            "detail": str(len(reader.pages)),
+            "name": "Page count (1-100 pages)",
+            "status": "pass" if 1 <= page_count <= MAX_PDF_PAGES else "fail",
+            "detail": str(page_count),
         })
         found_kw = [kw for kw in required_keywords if kw.lower() in text.lower()]
         if found_kw:
@@ -90,11 +93,11 @@ def validate_pdf_file(
         if map_created_at and deadline:
             checks.append({
                 "name": "Date check (within MAP window)",
-                "status": "pass",
-                "detail": "Metadata present; deadline window assumed valid for demo file",
+                "status": "manual_review" if not creation else "pass",
+                "detail": "PDF metadata timestamp present" if creation else "PDF metadata timestamp missing",
             })
         else:
-            checks.append({"name": "Date check (<= deadline)", "status": "pass"})
+            checks.append({"name": "Date check (<= deadline)", "status": "manual_review", "reason": "MAP window unavailable"})
     except Exception as e:
         checks.append({"name": "PDF parse", "status": "fail", "reason": str(e)})
 
@@ -108,8 +111,8 @@ def validate_image_file(file_path: str, min_resolution: int = 800) -> dict:
         size = os.path.getsize(file_path)
         checks.append({"name": "File exists", "status": "pass"})
         checks.append({
-            "name": "File size limit",
-            "status": "pass" if size < 10 * 1024 * 1024 else "fail",
+            "name": "File size limit (50MB)",
+            "status": "pass" if size <= MAX_EVIDENCE_FILE_SIZE else "fail",
             "detail": f"{size} bytes",
         })
         try:
@@ -162,10 +165,10 @@ def validate_generic_file(file_path: str) -> dict:
         size = os.path.getsize(file_path)
         checks.append({"name": "File type check", "status": "pass"})
         checks.append({
-            "name": "Size limit (10MB)",
-            "status": "pass" if size <= 10 * 1024 * 1024 else "fail",
+            "name": "Size limit (50MB)",
+            "status": "pass" if size <= MAX_EVIDENCE_FILE_SIZE else "fail",
         })
-        checks.append({"name": "Virus scan (mock)", "status": "pass"})
+        checks.append({"name": "Malware scan placeholder", "status": "manual_review", "reason": "External scanner not configured"})
     except OSError as e:
         checks.append({"name": "File type check", "status": "fail", "reason": str(e)})
 

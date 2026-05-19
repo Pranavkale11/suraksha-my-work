@@ -21,25 +21,17 @@ except Exception as e:
     def get_embedding(text):
         return [random.uniform(-1, 1) for _ in range(384)]
 
+from seed_users_only import DEPARTMENTS, USERS
+from core.security import get_password_hash
+
 def generate_departments():
-    return [
-        {"department_id": f"dept_{i}", "name": name, "head_id": f"emp_{i*3}"}
-        for i, name in enumerate(["IT Security", "HR", "Legal", "Finance", "Operations", "Compliance"])
-    ]
+    return DEPARTMENTS
 
 def generate_users(depts):
-    users = []
-    roles = ["admin", "compliance_officer", "department_head", "auditor"]
-    for i in range(20):
-        users.append({
-            "emp_id": f"emp_{i}",
-            "name": f"User {i}",
-            "email": f"user{i}@suraksha.local",
-            "role": random.choice(roles),
-            "department_id": random.choice(depts)["department_id"],
-            "status": "active"
-        })
-    return users
+    pwd = get_password_hash("Demo@123")
+    for u in USERS:
+        u["hashed_password"] = pwd
+    return USERS
 
 def generate_golden_threads(users, depts):
     # Generates 3 cohesive chains of Circular -> Policy -> MAP -> Evidence

@@ -11,6 +11,8 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from database import db
 from api.auth import get_current_user
 from services.map_generator import log_audit, build_timeline
+from services.map_completion import validate_required_evidence
+from services.validator_service import validate_evidence
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -168,29 +170,46 @@ async def complete_map(
     if role not in ADMIN_ROLES and m.get("assigned_to") != current_user["emp_id"]:
         raise HTTPException(403, "You are not assigned to this MAP")
 
-    # Check all required evidence is uploaded
-    evidence = m.get("evidence_items", [])
-    missing = [e["label"] for e in evidence if e.get("required") and not e.get("uploaded")]
-    if missing:
+    now = datetime.utcnow()
+    validation = await validate_required_evidence(database, m)
+    update_fields = {
+        "evidence_items": validation["evidence_items"],
+        "submitted_for_validation_at": now,
+        "last_validation_checked_at": validation["checked_at"],
+    }
+    if not validation["can_complete"]:
+        update_fields.update({
+            "status": "pending_validation",
+            "validation_blockers": validation["blockers"],
+            "timeline": build_timeline("pending_validation", m.get("created_at", now), now),
+        })
+        await database.maps.update_one({"map_id": map_id}, {"$set": update_fields})
+        await log_audit(
+            database, map_id,
+            current_user["emp_id"], current_user.get("name", "Employee"),
+            "map_validation_blocked",
+            f"Completion blocked by evidence validation: {validation['blockers']}",
+        )
         raise HTTPException(
-            400,
-            f"Upload required evidence first: {', '.join(missing)}",
+            status_code=422,
+            detail={
+                "message": "MAP cannot be completed until required evidence passes validation or is officer-overridden.",
+                "blockers": validation["blockers"],
+            },
         )
 
-    now = datetime.utcnow()
-    await database.maps.update_one(
-        {"map_id": map_id},
-        {"$set": {
+    update_fields.update({
             "status": "complete",
             "completed_at": now,
+            "validation_blockers": [],
             "timeline": build_timeline("complete", m.get("created_at", now), now),
-        }},
-    )
+    })
+    await database.maps.update_one({"map_id": map_id}, {"$set": update_fields})
     await log_audit(
         database, map_id,
         current_user["emp_id"], current_user.get("name", "Employee"),
         "map_completed",
-        "Task marked as complete by assigned employee",
+        "Required evidence validated; MAP marked complete",
     )
     return {"status": "complete", "map_id": map_id}
 
@@ -229,9 +248,29 @@ async def upload_evidence(
     file_url = f"/uploads/{filename}"
 
     # Update the specific evidence item
+    evidence_id = f"ev_{uuid.uuid4().hex[:10]}"
     evidence[evidence_index]["uploaded"] = True
     evidence[evidence_index]["file_url"] = file_url
     evidence[evidence_index]["uploaded_at"] = datetime.utcnow().isoformat()
+    evidence[evidence_index]["evidence_id"] = evidence_id
+    evidence[evidence_index]["validation_status"] = "pending_validation"
+
+    await database.evidence.insert_one({
+        "evidence_id": evidence_id,
+        "map_id": map_id,
+        "evidence_index": evidence_index,
+        "type": evidence[evidence_index].get("evidence_type", "generic"),
+        "filename": filename,
+        "original_filename": file.filename,
+        "file_path": filepath,
+        "file_url": file_url,
+        "uploader_id": current_user["emp_id"],
+        "uploaded_at": datetime.utcnow(),
+        "validation_status": "pending_validation",
+    })
+    validation_result = await validate_evidence(database, evidence_id)
+    evidence[evidence_index]["validation_status"] = validation_result["validation_status"]
+    evidence[evidence_index]["confidence"] = validation_result["confidence_score"]
 
     await database.maps.update_one(
         {"map_id": map_id},
@@ -247,6 +286,9 @@ async def upload_evidence(
         "status": "uploaded",
         "map_id": map_id,
         "evidence_index": evidence_index,
+        "evidence_id": evidence_id,
+        "validation_status": validation_result["validation_status"],
+        "confidence_score": validation_result["confidence_score"],
         "file_url": file_url,
     }
 
@@ -255,21 +297,32 @@ async def upload_evidence(
 
 @router.get("/dashboard")
 async def get_dashboard_stats():
+    database = get_db()
+    
+    total_circ = await database.circulars.count_documents({})
+    processed_circ = await database.circulars.count_documents({"status": "Fully Parsed"})
+    failed_circ = await database.circulars.count_documents({"status": "Failed"})
+    
+    confirmed_gaps = await database.gaps.count_documents({"status": "confirmed"})
+    suspected_gaps = await database.gaps.count_documents({"status": "suspected"})
+    
+    total_maps = await database.maps.count_documents({})
+    complete_maps = await database.maps.count_documents({"status": "complete"})
+    map_rate = round((complete_maps / total_maps * 100) if total_maps > 0 else 0)
+    
     return {
-        "regulatory_coverage": {"processed": 45, "total": 50},
-        "active_gaps": {"confirmed": 12, "suspected": 8},
-        "map_completion": {"rate": 85},
+        "regulatory_coverage": {"processed": processed_circ, "total": total_circ},
+        "active_gaps": {"confirmed": confirmed_gaps, "suspected": suspected_gaps},
+        "map_completion": {"rate": map_rate},
         "behavioral_health": {"green_sessions": 92},
         "charts": {
-            "circular_status": {"parsed": 45, "failed": 2, "pending": 3},
-            "map_status": {"it": {"done": 10, "pending": 2}, "compliance": {"done": 5, "pending": 1}},
+            "circular_status": {"parsed": processed_circ, "failed": failed_circ, "pending": total_circ - processed_circ - failed_circ},
+            "map_status": {"overall": {"done": complete_maps, "pending": total_maps - complete_maps}},
             "gap_trend": [{"date": "2026-05-01", "count": 5}, {"date": "2026-05-15", "count": 12}],
             "dept_workload": {"it": 12, "compliance": 6, "hr": 3},
         },
         "alerts": [
-            {"type": "error", "message": "Failed to parse RBI/2026-XYZ"},
-            {"type": "warning", "message": "MAP-2026-015 is overdue"},
-            {"type": "info", "message": "Behavioral anomaly detected for user IT-44"},
+            {"type": "info", "message": "Dashboard stats are now live from DB!"},
         ],
     }
 

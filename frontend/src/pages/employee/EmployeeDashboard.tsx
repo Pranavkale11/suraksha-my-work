@@ -13,6 +13,9 @@ interface EvidenceItem {
   label: string;
   required: boolean;
   uploaded: boolean;
+  evidence_id?: string;
+  validation_status?: string;
+  confidence?: number;
   file_url?: string;
 }
 
@@ -43,6 +46,7 @@ const statusColor: Record<string, string> = {
   open:        'bg-blue-100 text-blue-700',
   in_progress: 'bg-purple-100 text-purple-700',
   complete:    'bg-emerald-100 text-emerald-700',
+  pending_validation: 'bg-amber-100 text-amber-700',
   escalated:   'bg-red-100 text-red-700',
   approved:    'bg-indigo-100 text-indigo-700',
 };
@@ -91,13 +95,21 @@ function EvidencePanel({ task, onRefresh }: { task: MapTask; onRefresh: () => vo
     try {
       const form = new FormData();
       form.append('file', file);
-      await apiClient.post(`/api/maps/${task.map_id}/evidence/${idx}`, form);
+      const res = await apiClient.post(`/api/maps/${task.map_id}/evidence/${idx}`, form);
       // optimistic update
-      setItems(prev => prev.map((e, i) => i === idx ? { ...e, uploaded: true } : e));
-      showToast('✅ Proof uploaded successfully!');
+      setItems(prev => prev.map((e, i) => i === idx ? {
+        ...e,
+        uploaded: true,
+        evidence_id: res.data.evidence_id,
+        validation_status: res.data.validation_status,
+        confidence: res.data.confidence_score,
+      } : e));
+      showToast(res.data.validation_status === 'pass'
+        ? 'Proof uploaded and validated.'
+        : `Proof uploaded. Validation status: ${res.data.validation_status}.`);
       onRefresh();
     } catch {
-      showToast('❌ Upload failed. Please try again.');
+      showToast('Upload failed. Please try again.');
     } finally {
       setUploading(prev => ({ ...prev, [idx]: false }));
     }
@@ -106,11 +118,15 @@ function EvidencePanel({ task, onRefresh }: { task: MapTask; onRefresh: () => vo
   const handleComplete = async () => {
     setCompleting(true);
     try {
-      await apiClient.patch(`/api/maps/${task.map_id}/complete`, { emp_id: user?.empId });
-      showToast('🎉 Task marked as complete!');
+      const res = await apiClient.patch(`/api/maps/${task.map_id}/complete`, { emp_id: user?.empId });
+      showToast(res.data.status === 'complete'
+        ? 'Task completed after evidence validation.'
+        : 'Task submitted for validation.');
       onRefresh();
-    } catch {
-      showToast('❌ Could not mark complete. Upload all required proofs first.');
+    } catch (err: any) {
+      const message = err?.response?.data?.detail?.message
+        ?? 'Could not complete. Required proofs must pass validation first.';
+      showToast(message);
     } finally {
       setCompleting(false);
     }
@@ -134,7 +150,7 @@ function EvidencePanel({ task, onRefresh }: { task: MapTask; onRefresh: () => vo
       </AnimatePresence>
 
       {items.length === 0 && (
-        <p className="text-sm text-slate-400 italic">No evidence items required for this task.</p>
+        <p className="text-sm text-slate-500">No evidence checklist is configured. Ask Compliance to add required proof types before completion.</p>
       )}
 
       {items.map((item, idx) => (
@@ -152,6 +168,12 @@ function EvidencePanel({ task, onRefresh }: { task: MapTask; onRefresh: () => vo
                   View uploaded proof
                 </a>
               )}
+              {item.validation_status && (
+                <p className="text-xs text-slate-500">
+                  Validation: <span className="font-semibold">{item.validation_status.replace('_', ' ')}</span>
+                  {typeof item.confidence === 'number' && ` (${Math.round(item.confidence * 100)}%)`}
+                </p>
+              )}
             </div>
           </div>
 
@@ -160,7 +182,13 @@ function EvidencePanel({ task, onRefresh }: { task: MapTask; onRefresh: () => vo
               <span className="text-xs text-red-500 font-semibold">Required</span>
             )}
             {item.uploaded ? (
-              <span className="px-2 py-1 text-xs bg-emerald-100 text-emerald-700 rounded-full font-semibold">
+              <span className={`px-2 py-1 text-xs rounded-full font-semibold ${
+                item.validation_status === 'pass' || item.validation_status === 'override_pass' || item.validation_status === 'approved'
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : item.validation_status === 'fail'
+                    ? 'bg-red-100 text-red-700'
+                    : 'bg-amber-100 text-amber-700'
+              }`}>
                 Uploaded ✓
               </span>
             ) : (
@@ -205,7 +233,7 @@ function EvidencePanel({ task, onRefresh }: { task: MapTask; onRefresh: () => vo
           {completing ? (
             <><Loader2 className="w-4 h-4 animate-spin" /> Submitting...</>
           ) : (
-            <><CheckCircle className="w-4 h-4" /> Mark Task as Complete</>
+            <><CheckCircle className="w-4 h-4" /> Validate & Complete</>
           )}
         </button>
       )}

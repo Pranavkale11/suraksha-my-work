@@ -1,18 +1,22 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from database import db
 from services.gap_detector import detect_gaps_for_circular
 from services.map_generator import generate_map_from_gap
 from models.gap import GapDetectionResponse
 from datetime import datetime
+from api.auth import get_current_user
 
 router = APIRouter()
+GAP_ROLES = {"admin", "compliance_officer", "auditor", "department_head"}
 
 def get_db():
     return db.client.suraksha_maps
 
 
 @router.post("/detect/{circular_id:path}", response_model=GapDetectionResponse)
-async def run_gap_detection(circular_id: str):
+async def run_gap_detection(circular_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") not in GAP_ROLES:
+        raise HTTPException(403, "Gap detection access required")
     database = get_db()
     try:
         result = await detect_gaps_for_circular(circular_id, database)
@@ -27,8 +31,11 @@ async def run_gap_detection(circular_id: str):
 async def get_gap_queue(
     triage_status: str = None,
     classification: str = None,
-    circular_id: str = None
+    circular_id: str = None,
+    current_user: dict = Depends(get_current_user),
 ):
+    if current_user.get("role") not in GAP_ROLES:
+        raise HTTPException(403, "Gap queue access required")
     database = get_db()
     query = {}
     if triage_status:
@@ -58,7 +65,9 @@ async def get_gap_queue(
 
 
 @router.get("/queue/{gap_id}")
-async def get_gap_detail(gap_id: str):
+async def get_gap_detail(gap_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") not in GAP_ROLES:
+        raise HTTPException(403, "Gap queue access required")
     database = get_db()
     item = await database.gap_queue.find_one({"gap_id": gap_id})
     if not item:
@@ -70,7 +79,9 @@ async def get_gap_detail(gap_id: str):
 
 
 @router.post("/queue/{gap_id}/approve")
-async def approve_gap(gap_id: str):
+async def approve_gap(gap_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") not in {"admin", "compliance_officer"}:
+        raise HTTPException(403, "Compliance officer access required")
     database = get_db()
     gap = await database.gap_queue.find_one({"gap_id": gap_id})
     if not gap:
@@ -91,7 +102,13 @@ async def approve_gap(gap_id: str):
 
 
 @router.post("/queue/{gap_id}/dismiss")
-async def dismiss_gap(gap_id: str, reason: str = "False positive"):
+async def dismiss_gap(
+    gap_id: str,
+    reason: str = "False positive",
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user.get("role") not in {"admin", "compliance_officer"}:
+        raise HTTPException(403, "Compliance officer access required")
     database = get_db()
     result = await database.gap_queue.update_one(
         {"gap_id": gap_id},
@@ -107,7 +124,9 @@ async def dismiss_gap(gap_id: str, reason: str = "False positive"):
 
 
 @router.post("/queue/{gap_id}/escalate")
-async def escalate_gap(gap_id: str):
+async def escalate_gap(gap_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") not in {"admin", "compliance_officer", "department_head"}:
+        raise HTTPException(403, "Escalation access required")
     database = get_db()
     result = await database.gap_queue.update_one(
         {"gap_id": gap_id},
@@ -119,7 +138,9 @@ async def escalate_gap(gap_id: str):
 
 
 @router.get("/circulars")
-async def list_circulars_for_gap_detection():
+async def list_circulars_for_gap_detection(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") not in GAP_ROLES:
+        raise HTTPException(403, "Gap detection access required")
     """Returns fully and partially parsed circulars eligible for gap detection."""
     database = get_db()
     cursor = database.circulars.find(

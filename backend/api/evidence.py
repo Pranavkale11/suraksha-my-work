@@ -1,9 +1,11 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 from database import db
 from services.validator_service import validate_evidence
+from api.auth import get_current_user
 
 router = APIRouter(prefix="/api/evidence", tags=["Evidence"])
+EVIDENCE_ROLES = {"admin", "compliance_officer", "department_head", "auditor"}
 
 
 def get_db():
@@ -11,7 +13,12 @@ def get_db():
 
 
 @router.post("/{evidence_id}/validate")
-async def validate_evidence_endpoint(evidence_id: str):
+async def validate_evidence_endpoint(
+    evidence_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user.get("role") not in EVIDENCE_ROLES:
+        raise HTTPException(403, "Evidence validation access required")
     database = get_db()
     try:
         return await validate_evidence(database, evidence_id)

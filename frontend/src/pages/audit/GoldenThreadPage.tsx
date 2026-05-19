@@ -26,9 +26,20 @@ export function GoldenThreadPage() {
   return (
     <div className="flex h-screen bg-gray-50 font-mono">
       <div className="flex-1 p-6 relative overflow-hidden">
-        <div className="flex justify-between items-center mb-8">
+        <div className="flex justify-between items-center mb-8 print:hidden">
           <h1 className="text-2xl font-bold">Golden Thread: {map_id || 'MAP-2026-013'}</h1>
-          <button className="bg-gray-800 text-white px-4 py-2 text-sm rounded shadow hover:bg-gray-700">Export PDF Report</button>
+          <button 
+            onClick={() => window.print()} 
+            className="bg-gray-800 text-white px-4 py-2 text-sm rounded shadow hover:bg-gray-700 print:hidden"
+          >
+            Export PDF Report
+          </button>
+        </div>
+
+        <div className="hidden print:block mb-8">
+          <h1 className="text-3xl font-bold text-center border-b pb-4">Golden Thread Audit Report</h1>
+          <p className="text-center mt-2">MAP ID: {map_id || 'MAP-2026-013'}</p>
+          <p className="text-center text-sm text-gray-500">Generated: {new Date().toLocaleDateString()}</p>
         </div>
 
         <div className="absolute top-1/2 left-10 right-10 flex items-center pr-10">
@@ -59,7 +70,7 @@ export function GoldenThreadPage() {
       </div>
 
       {selectedNode && (
-        <div className="w-1/3 bg-white border-l border-gray-200 p-6 shadow-xl overflow-y-auto animate-in slide-in-from-right">
+        <div className="w-1/3 bg-white border-l border-gray-200 p-6 shadow-xl overflow-y-auto animate-in slide-in-from-right print:w-full print:border-none print:shadow-none print:mt-10">
           <div className="flex justify-between items-center border-b pb-4 mb-4">
              <h2 className="text-xl font-bold">{selectedNode.type} Details</h2>
              <button onClick={() => setSelectedNode(null)} className="text-gray-500 hover:text-black">✖</button>

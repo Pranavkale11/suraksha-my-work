@@ -23,6 +23,32 @@ export function PolicyLifecycleManager() {
     fetchPolicies();
   }, []);
 
+  const handleArchive = async (id: string) => {
+    if (!confirm('Are you sure you want to archive this policy?')) return;
+    try {
+      await apiClient.patch(`/api/admin/policies/${id}/archive`);
+      fetchPolicies();
+    } catch (err: any) {
+      alert('Failed to archive policy');
+    }
+  };
+
+  const handleEdit = async (pol: any) => {
+    const newTitle = prompt('Enter new title:', pol.title);
+    if (!newTitle) return;
+    const formData = new FormData();
+    formData.append('title', newTitle);
+    formData.append('version', pol.version);
+    formData.append('department', pol.department);
+
+    try {
+      await apiClient.patch(`/api/admin/policies/${pol.id}`, formData);
+      fetchPolicies();
+    } catch (err: any) {
+      alert('Failed to edit policy');
+    }
+  };
+
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file) return alert('Please select a file');
@@ -92,8 +118,8 @@ export function PolicyLifecycleManager() {
                    }`}>{pol.status}</span>
                  </td>
                  <td className="px-6 py-4 space-x-3">
-                   <button className="text-blue-500 hover:underline font-medium">Edit</button>
-                   <button className="text-slate-500 hover:underline font-medium">Archive</button>
+                   <button onClick={() => handleEdit(pol)} className="text-blue-500 hover:underline font-medium">Edit</button>
+                   <button onClick={() => handleArchive(pol.id)} className="text-slate-500 hover:underline font-medium">Archive</button>
                  </td>
                </tr>
              ))}

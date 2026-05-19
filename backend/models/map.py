@@ -34,6 +34,9 @@ class EvidenceItem(BaseModel):
     label: str
     required: bool = True
     uploaded: bool = False
+    evidence_id: Optional[str] = None
+    validation_status: Optional[str] = None
+    confidence: Optional[float] = None
     file_url: Optional[str] = None
     uploaded_at: Optional[datetime] = None
 
