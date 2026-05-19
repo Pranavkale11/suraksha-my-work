@@ -18,22 +18,13 @@ export const circularsApi = {
   downloadUrl: (circularId: string) => `${API_BASE}${circularApiPath(circularId, '/download')}`,
 };
 
-function safeRequestBody(data: unknown): unknown {
-  if (data instanceof FormData) return '[multipart form data]';
-  if (typeof data !== 'string') return data;
-  try {
-    return JSON.parse(data);
-  } catch {
-    return data;
-  }
-}
-
 // ─────────────────────────────────────────────────────────────
 //  Axios instance
 // ─────────────────────────────────────────────────────────────
 export const apiClient = axios.create({
   baseURL: API_BASE,
   timeout: 60_000,
+  headers: { 'Content-Type': 'application/json' },
 });
 
 // ── Request interceptor: attach JWT ──────────────────────────
@@ -60,7 +51,7 @@ apiClient.interceptors.response.use(
         status: response.status,
         duration,
         timestamp: new Date().toISOString(),
-        requestBody: safeRequestBody(response.config.data),
+        requestBody: response.config.data ? JSON.parse(response.config.data) : undefined,
         responseBody: response.data,
       };
       const existing: RequestLogEntry[] = (window as any).__JUDGE_LOG ?? [];

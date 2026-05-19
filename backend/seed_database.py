@@ -31,6 +31,7 @@ def generate_users(depts):
     pwd = get_password_hash("Demo@123")
     for u in USERS:
         u["hashed_password"] = pwd
+        u["status"] = "active"
     return USERS
 
 def generate_golden_threads(users, depts):
@@ -85,7 +86,7 @@ def generate_golden_threads(users, depts):
             "map_id": map_id,
             "circular_id": circ_id,
             "policy_id": pol_id,
-            "status": "published",
+            "status": "approved",
             "owner_department_id": dept,
             "assigned_to": user,
             "deadline": datetime.now() + timedelta(days=15),
@@ -150,7 +151,7 @@ async def main():
         m.append({
             "map_id": f"map_rnd_{i}",
             "circular_id": f"circ_rnd_{i}",
-            "policy_id": None,
+            "policy_id": "",
             "status": "draft",
             "owner_department_id": depts[0]["department_id"],
             "assigned_to": users[0]["emp_id"],
