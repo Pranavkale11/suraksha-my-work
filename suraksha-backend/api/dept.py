@@ -8,6 +8,8 @@ from database import db
 from api.auth import get_current_user
 from services.routing_service import route_map, adjust_active_maps_count
 from services.audit_logger import append_audit_log
+from services.map_completion import validate_required_evidence
+from services.validator_service import validate_evidence
 
 router = APIRouter(prefix="/api/dept", tags=["Department"])
 
@@ -30,6 +32,15 @@ def _status_label(status: str) -> str:
         "approved": "OPEN",
         "draft": "OPEN",
     }.get(status, status.upper().replace("_", " "))
+
+
+def _can_access_map(user: dict, map_doc: dict) -> bool:
+    role = user.get("role", "")
+    if role in ("admin", "compliance_officer", "auditor"):
+        return True
+    if role == "department_head":
+        return map_doc.get("owner_department_id") == user.get("department_id")
+    return map_doc.get("assigned_to") == user.get("emp_id")
 
 
 @router.post("/routing/assign/{map_id}")
@@ -81,6 +92,8 @@ async def get_map_detail(map_id: str, current_user: dict = Depends(get_current_u
     m = await database.maps.find_one({"map_id": map_id})
     if not m:
         raise HTTPException(404, "MAP not found")
+    if not _can_access_map(current_user, m):
+        raise HTTPException(403, "Not authorized for this MAP")
     m["_id"] = str(m["_id"])
     for key in ("deadline", "created_at", "approved_at", "completed_at"):
         if isinstance(m.get(key), datetime):
@@ -99,6 +112,8 @@ async def upload_evidence(
     m = await database.maps.find_one({"map_id": map_id})
     if not m:
         raise HTTPException(404, "MAP not found")
+    if not _can_access_map(current_user, m):
+        raise HTTPException(403, "Not authorized for this MAP")
 
     ext = os.path.splitext(file.filename or "file")[1] or ".bin"
     filename = f"{map_id}_{uuid.uuid4().hex[:8]}{ext}"
@@ -108,16 +123,41 @@ async def upload_evidence(
         f.write(contents)
 
     evidence_id = f"ev_{uuid.uuid4().hex[:10]}"
+    evidence_items = list(m.get("evidence_items", []))
+    evidence_index = next(
+        (
+            idx for idx, item in enumerate(evidence_items)
+            if not item.get("uploaded") and item.get("evidence_type", evidence_type) == evidence_type
+        ),
+        next((idx for idx, item in enumerate(evidence_items) if not item.get("uploaded")), None),
+    )
+
     await database.evidence.insert_one({
         "evidence_id": evidence_id,
         "map_id": map_id,
+        "evidence_index": evidence_index,
         "type": evidence_type,
         "filename": filename,
+        "original_filename": file.filename,
         "file_path": filepath,
+        "file_url": f"/uploads/{filename}",
         "uploader_id": current_user["emp_id"],
         "uploaded_at": datetime.utcnow(),
         "validation_status": "pending_validation",
     })
+    validation_result = await validate_evidence(database, evidence_id)
+
+    if evidence_index is not None:
+        evidence_items[evidence_index]["uploaded"] = True
+        evidence_items[evidence_index]["file_url"] = f"/uploads/{filename}"
+        evidence_items[evidence_index]["uploaded_at"] = datetime.utcnow().isoformat()
+        evidence_items[evidence_index]["evidence_id"] = evidence_id
+        evidence_items[evidence_index]["validation_status"] = validation_result["validation_status"]
+        evidence_items[evidence_index]["confidence"] = validation_result["confidence_score"]
+        await database.maps.update_one(
+            {"map_id": map_id},
+            {"$set": {"evidence_items": evidence_items}},
+        )
 
     await append_audit_log(
         database,
@@ -132,7 +172,8 @@ async def upload_evidence(
 
     return {
         "evidence_id": evidence_id,
-        "validation_status": "pending_validation",
+        "validation_status": validation_result["validation_status"],
+        "confidence_score": validation_result["confidence_score"],
         "file_url": f"/uploads/{filename}",
     }
 
@@ -143,24 +184,58 @@ async def complete_map(map_id: str, current_user: dict = Depends(get_current_use
     m = await database.maps.find_one({"map_id": map_id})
     if not m:
         raise HTTPException(404, "MAP not found")
-    if m.get("assigned_to") != current_user["emp_id"] and current_user.get("role") != "department_head":
-        raise HTTPException(403, "Not assigned to this MAP")
+    if not _can_access_map(current_user, m):
+        raise HTTPException(403, "Not authorized for this MAP")
 
     now = datetime.utcnow()
-    await database.maps.update_one(
-        {"map_id": map_id},
-        {"$set": {"status": "pending_validation", "submitted_for_validation_at": now}},
-    )
+    validation = await validate_required_evidence(database, m)
+    update_fields = {
+        "evidence_items": validation["evidence_items"],
+        "submitted_for_validation_at": now,
+        "last_validation_checked_at": validation["checked_at"],
+    }
+
+    if not validation["can_complete"]:
+        update_fields.update({
+            "status": "pending_validation",
+            "validation_blockers": validation["blockers"],
+        })
+        await database.maps.update_one({"map_id": map_id}, {"$set": update_fields})
+        audit = await append_audit_log(
+            database,
+            action_type="map_validation_blocked",
+            target_type="map",
+            target_id=map_id,
+            user_id=current_user["emp_id"],
+            user_name=current_user.get("name", ""),
+            state_change={"field": "status", "old_value": m.get("status"), "new_value": "pending_validation"},
+            details={"blockers": validation["blockers"]},
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "MAP cannot be completed until required evidence passes validation or is officer-overridden.",
+                "blockers": validation["blockers"],
+                "audit_log_id": audit["log_id"],
+            },
+        )
+
+    update_fields.update({
+        "status": "complete",
+        "completed_at": now,
+        "validation_blockers": [],
+    })
+    await database.maps.update_one({"map_id": map_id}, {"$set": update_fields})
     audit = await append_audit_log(
         database,
-        action_type="map_submit_validation",
+        action_type="map_complete",
         target_type="map",
         target_id=map_id,
         user_id=current_user["emp_id"],
         user_name=current_user.get("name", ""),
-        state_change={"field": "status", "old_value": m.get("status"), "new_value": "pending_validation"},
+        state_change={"field": "status", "old_value": m.get("status"), "new_value": "complete"},
     )
-    return {"success": True, "audit_log_id": audit["log_id"], "status": "pending_validation"}
+    return {"success": True, "audit_log_id": audit["log_id"], "status": "complete"}
 
 
 @router.post("/maps/{map_id}/extend")

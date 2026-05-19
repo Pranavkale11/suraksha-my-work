@@ -26,7 +26,7 @@ def compute_tamper_hash(doc: dict, previous_log_hash: str) -> str:
 async def get_latest_hash(database: Any) -> str:
     latest = await database.audit_logs.find_one(
         {},
-        sort=[("timestamp", -1)],
+        sort=[("chain_index", -1), ("timestamp", -1), ("log_id", -1)],
         projection={"tamper_evident_hash": 1},
     )
     if latest and latest.get("tamper_evident_hash"):
@@ -51,11 +51,13 @@ async def append_audit_log(
     user_agent: Optional[str] = None,
 ) -> dict:
     prev_hash = await get_latest_hash(database)
+    chain_index = await database.audit_logs.count_documents({}) + 1
     now = datetime.utcnow()
     log_id = f"AUD-{uuid4()}"
 
     audit_doc = {
         "log_id": log_id,
+        "chain_index": chain_index,
         "timestamp": now,
         "user_id": user_id,
         "user_name": user_name,
@@ -82,7 +84,7 @@ async def append_audit_log(
 
 
 async def verify_audit_chain(database: Any) -> dict:
-    cursor = database.audit_logs.find({}).sort("timestamp", 1)
+    cursor = database.audit_logs.find({}).sort([("chain_index", 1), ("timestamp", 1), ("log_id", 1)])
     prev_h = GENESIS_HASH
     total = 0
     broken_at = None

@@ -73,3 +73,26 @@ async def upload_policy(
     
     return {"status": "success", "policy_id": policy_id}
 
+
+@router.patch('/{policy_id}/archive')
+async def archive_policy(policy_id: str):
+    database = get_db()
+    res = await database.policies.update_one({'policy_id': policy_id}, {'$set': {'status': 'archived', 'valid_until': datetime.utcnow()}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail='Policy not found')
+    return {'status': 'success', 'message': 'Policy archived'}
+
+@router.patch('/{policy_id}')
+async def update_policy(policy_id: str, title: str = Form(None), version: str = Form(None), department: str = Form(None)):
+    database = get_db()
+    update_data = {}
+    if title: update_data['title'] = title
+    if version: update_data['version'] = version
+    if department: update_data['department'] = department
+    if not update_data:
+        raise HTTPException(status_code=400, detail='No fields to update')
+        
+    res = await database.policies.update_one({'policy_id': policy_id}, {'$set': update_data})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail='Policy not found')
+    return {'status': 'success', 'message': 'Policy updated'}

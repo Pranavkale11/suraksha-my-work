@@ -1,7 +1,6 @@
 import re
 import uuid
 import time
-import random
 import logging
 import asyncio
 from datetime import datetime, timedelta
@@ -234,11 +233,11 @@ async def vector_search_policies(clause_embedding: list, db, clause_text: str, t
             timeout=8.0,
         )
     except (asyncio.TimeoutError, Exception) as e:
-        logger.warning("$vectorSearch unavailable (%s). Using keyword fallback.", e)
+        logger.warning("$vectorSearch unavailable (%s). Falling back to deterministic manual-review scores.", e)
         raw_cursor = db.policies.find({"status": "active"}).limit(top_k)
         raw = await raw_cursor.to_list(length=top_k)
         for r in raw:
-            r["score"] = round(random.uniform(0.55, 0.92), 4)
+            r["score"] = 0.0
 
     matches = []
     for r in raw:

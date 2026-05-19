@@ -7,6 +7,8 @@ from database import db
 from services.validator_service import validate_evidence
 from services.audit_logger import append_audit_log
 from api.auth import get_current_user
+from services.map_completion import validate_required_evidence
+from services.map_generator import build_timeline
 
 router = APIRouter(prefix="/api/validation", tags=["Validation"])
 
@@ -24,7 +26,12 @@ def get_db():
 
 
 @router.post("/validate/{evidence_id}")
-async def validate_evidence_route(evidence_id: str):
+async def validate_evidence_route(
+    evidence_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user.get("role") not in OFFICER_ROLES:
+        raise HTTPException(403, "Validation access required")
     database = get_db()
     try:
         result = await validate_evidence(database, evidence_id)
@@ -45,6 +52,8 @@ async def override_validation(
 ):
     if current_user.get("role") not in OFFICER_ROLES:
         raise HTTPException(403, "Only compliance officers may override validation")
+    if req.new_status not in ("pass", "fail", "manual_review", "override_pass", "approved"):
+        raise HTTPException(400, "Unsupported validation status")
 
     database = get_db()
     ev = await database.evidence.find_one({"evidence_id": evidence_id})
@@ -62,6 +71,21 @@ async def override_validation(
             }
         },
     )
+
+    map_id = ev.get("map_id")
+    if map_id:
+        map_doc = await database.maps.find_one({"map_id": map_id})
+        if map_doc:
+            evidence_items = list(map_doc.get("evidence_items", []))
+            evidence_index = ev.get("evidence_index")
+            if isinstance(evidence_index, int) and 0 <= evidence_index < len(evidence_items):
+                evidence_items[evidence_index]["validation_status"] = req.new_status
+                evidence_items[evidence_index]["evidence_id"] = evidence_id
+                await database.maps.update_one(
+                    {"map_id": map_id},
+                    {"$set": {"evidence_items": evidence_items}},
+                )
+
     audit = await append_audit_log(
         database,
         action_type="validation_override",
@@ -72,11 +96,36 @@ async def override_validation(
         details={"new_status": req.new_status, "reason": req.reason},
         provenance={"map_id": ev.get("map_id")},
     )
-    return {"updated_status": req.new_status, "audit_log_id": audit["log_id"]}
+
+    completed_map = False
+    if req.new_status in ("pass", "override_pass", "approved") and map_id:
+        map_doc = await database.maps.find_one({"map_id": map_id})
+        if map_doc:
+            validation = await validate_required_evidence(database, map_doc)
+            if validation["can_complete"]:
+                now = datetime.utcnow()
+                await database.maps.update_one(
+                    {"map_id": map_id},
+                    {"$set": {
+                        "status": "complete",
+                        "completed_at": now,
+                        "evidence_items": validation["evidence_items"],
+                        "validation_blockers": [],
+                        "timeline": build_timeline("complete", map_doc.get("created_at", now), now),
+                    }},
+                )
+                completed_map = True
+
+    return {"updated_status": req.new_status, "audit_log_id": audit["log_id"], "completed_map": completed_map}
 
 
 @router.get("/queue")
-async def get_validation_queue(status: Optional[str] = None):
+async def get_validation_queue(
+    status: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user.get("role") not in OFFICER_ROLES:
+        raise HTTPException(403, "Validation queue access required")
     database = get_db()
     query = {}
     if status:
@@ -95,20 +144,9 @@ async def get_validation_queue(status: Optional[str] = None):
             else str(ev.get("uploaded_at", "")),
             "status": ev.get("validation_status", "pending_validation"),
             "confidence": ev.get("confidence", 0),
+            "filename": ev.get("original_filename") or ev.get("filename"),
+            "details": (ev.get("validation_details") or {}).get("checks", []),
         })
-
-    if not items:
-        items = [
-            {
-                "evidence_id": "ev_pdf_pass",
-                "map_id": "MAP-2026-013",
-                "type": "pdf",
-                "uploader": "EMP-INFOSEC-003",
-                "upload_time": "2026-05-17T10:00:00Z",
-                "status": "pass",
-                "confidence": 0.89,
-            },
-        ]
 
     if status:
         items = [q for q in items if q["status"] == status]

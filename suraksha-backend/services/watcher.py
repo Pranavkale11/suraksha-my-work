@@ -2,7 +2,7 @@ import re
 import asyncio
 import io
 import time
-import random
+import hashlib
 import logging
 from dataclasses import dataclass
 from typing import List, Optional
@@ -13,6 +13,7 @@ import pdfplumber
 from docx import Document
 
 from models.circular import Clause
+from services.notification import send_notification
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +30,10 @@ def get_embedder():
     if _embedder is None and not _use_mock:
         try:
             from sentence_transformers import SentenceTransformer
-            _embedder = SentenceTransformer("all-MiniLM-L6-v2")
+            _embedder = SentenceTransformer("all-MiniLM-L6-v2", local_files_only=True)
             logger.info("SentenceTransformer loaded successfully.")
         except Exception as e:
-            logger.warning(f"Failed to load sentence_transformers: {e}. Using mock embeddings.")
+            logger.warning(f"Failed to load local sentence_transformers model: {e}. Using deterministic fallback embeddings.")
             _use_mock = True
     return _embedder
 
@@ -42,7 +43,11 @@ async def generate_embeddings(texts: List[str]) -> List[List[float]]:
         return []
     embedder = get_embedder()
     if embedder is None:
-        return [[random.uniform(-1, 1) for _ in range(384)] for _ in texts]
+        embeddings = []
+        for text in texts:
+            digest = hashlib.sha256(text.encode("utf-8")).digest()
+            embeddings.append([((digest[i % len(digest)] / 255.0) * 2) - 1 for i in range(384)])
+        return embeddings
     loop = asyncio.get_event_loop()
     embeddings = await loop.run_in_executor(None, embedder.encode, texts)
     return embeddings.tolist()
@@ -399,6 +404,13 @@ async def process_circular(
         embs = await generate_embeddings(texts)
         for c, emb in zip(clauses, embs):
             c.embedding = emb
+
+    if status == "failed":
+        await send_notification(
+            user_id="EMP-INFOSEC-001",
+            subject="Parsing Failed Alert",
+            message=f"Failed to parse circular: {filename}. Please check system logs."
+        )
 
     duration_ms = int((time.time() - start) * 1000)
     return status, clauses, duration_ms, confidence, text
