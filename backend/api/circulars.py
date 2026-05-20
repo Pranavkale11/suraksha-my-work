@@ -69,7 +69,7 @@ async def upload_circular(
                 detail=f"PDF exceeds {MAX_PDF_PAGES} page limit. Pages: {pages_processed}",
             )
 
-    status, clauses, time_ms, confidence, full_text = await process_circular(
+    status, clauses, time_ms, confidence, full_text, ocr_metadata, flagged_for_manual_review = await process_circular(
         file_bytes, file.filename
     )
 
@@ -116,6 +116,8 @@ async def upload_circular(
         "full_text": full_text,
         "full_text_hash": text_hash,
         "uploaded_by": current_user["emp_id"],
+        "ocr_metadata": ocr_metadata,
+        "flagged_for_manual_review": flagged_for_manual_review or (status == "failed"),
     }
 
     await database.circulars.insert_one(doc)
@@ -208,7 +210,7 @@ async def reparse_circular(
         raise HTTPException(status_code=404, detail="Original file not found in GridFS")
 
     file_bytes, filename, _ = await download_file_from_gridfs(doc["gridfs_id"])
-    status, clauses, time_ms, confidence, full_text = await process_circular(
+    status, clauses, time_ms, confidence, full_text, ocr_metadata, flagged_for_manual_review = await process_circular(
         file_bytes, filename
     )
     text_hash = hashlib.sha256((full_text or "").encode("utf-8")).hexdigest()
@@ -225,6 +227,8 @@ async def reparse_circular(
                 "full_text": full_text,
                 "full_text_hash": text_hash,
                 "reparsed_at": datetime.utcnow(),
+                "ocr_metadata": ocr_metadata,
+                "flagged_for_manual_review": flagged_for_manual_review or (status == "failed"),
             }
         },
     )
