@@ -5,7 +5,7 @@ import time
 import hashlib
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from PyPDF2 import PdfReader
 import fitz  # PyMuPDF

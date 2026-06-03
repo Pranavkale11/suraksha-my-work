@@ -301,9 +301,9 @@ async def detect_gaps_for_circular(circular_id: str, db) -> GapDetectionResponse
             reason=f"Cannot process {status} circular",
             detection_time_ms=int((time.time() - start) * 1000),
         )
-    if status != "fully_parsed":
+    if status not in ("fully_parsed", "processed"):
         raise ValueError(
-            f"Circular '{circular_id}' has status '{status}'. Only fully_parsed circulars are eligible."
+            f"Circular '{circular_id}' has status '{status}'. Only fully_parsed and processed circulars are eligible."
         )
 
     clauses = circular.get("clauses", [])

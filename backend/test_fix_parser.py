@@ -54,7 +54,9 @@ def parse_clauses_v2(text: str):
             
     return clauses
 
-with open('c:/Users/hardi/Desktop/suraksha/suraksha-maps-v4/rbi_circular_demo.txt', 'r') as f:
+import os
+demo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'rbi_circular_demo.txt')
+with open(demo_path, 'r', encoding='utf-8') as f:
     text = f.read()
 
 print(parse_clauses_v2(text))
